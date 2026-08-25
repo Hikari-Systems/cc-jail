@@ -35,7 +35,7 @@ By default `/workspace` is `./cc-jail`, an empty directory in this repo, which i
 useless place to work. Point it at your actual code with `WORKSPACE_HOST`:
 
 ```bash
-WORKSPACE_HOST=~/git/hs docker compose run --rm claude
+WORKSPACE_HOST=~/git/projects docker compose run --rm claude
 ```
 
 ## Options
@@ -65,8 +65,8 @@ path on both sides is worth doing if Claude will run `docker` itself — see
 [Docker access](#docker-access) for why:
 
 ```dotenv
-WORKSPACE_HOST=/home/you/git/hs
-WORKSPACE_PATH=/home/you/git/hs
+WORKSPACE_HOST=/home/you/git/projects
+WORKSPACE_PATH=/home/you/git/projects
 ```
 
 ### Docker socket group
@@ -88,14 +88,14 @@ Compose itself has no command substitution — `${DOCKER_GID:-999}` can fall bac
 to a command — so the lookup has to happen in the shell. Worth a function if you use this often:
 
 ```bash
-hsclaude() {
-  ( cd ~/git/hs/cc-jail \
+ccjail() {
+  ( cd ~/git/projects/cc-jail \
     && DOCKER_GID=$(stat -c '%g' /var/run/docker.sock) \
        docker compose run --rm claude "${@:-bash}" )
 }
 ```
 
-`hsclaude` for a shell, `hsclaude claude` to go straight into the agent. The subshell keeps the `cd`
+`ccjail` for a shell, `ccjail claude` to go straight into the agent. The subshell keeps the `cd`
 from leaking into your session. To check the wiring:
 
 ```bash
