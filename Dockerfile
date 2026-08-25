@@ -61,8 +61,24 @@ RUN apt-get update \
 	&& usermod --append --groups "${DOCKER_GROUP}" claude \
 	# Sanity check: the group logic above must have taken effect.
 	&& id -nG claude | tr ' ' '\n' | grep -qx "${DOCKER_GROUP}" \
-    # ADD HERE ANYTHING ELSE YOU WANT TO INSTALL IN THE IMAGE, e.g.:
+	#
+    # ADD BELOW HERE ANYTHING ELSE YOU WANT TO INSTALL IN THE IMAGE, e.g.:
     # && apt-get install -y --no-install-recommends <package> \
+	#
+	# GitHub CLI, from GitHub's own apt repo. Its "stable" suite is
+	# distro-independent, so this needs no codename fallback like docker's.
+	#
+	&& curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+		-o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+	&& chmod a+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+	&& echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+		> /etc/apt/sources.list.d/github-cli.list \
+	&& apt-get update \
+	&& apt-get install -y --no-install-recommends gh \
+	# Linear's own CLI (command: "lin") and a ClickUp CLI (command: "cup").
+	# ClickUp publishes no official CLI, so this is the most widely used
+	# third-party one; swap the package if you prefer another.
+	&& npm install --global @linear/cli @krodak/clickup-cli \
 	&& chmod 755 /home/claude \
 	&& rm -rf /var/lib/apt/lists/*
 
