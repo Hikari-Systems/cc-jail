@@ -297,29 +297,127 @@ docker compose --profile memory up -d graphiti
 docker compose run --rm claude
 ```
 
-Then, inside the jail, register the server with Claude Code — once ever, since `.claude/` is a
-bind mount that outlives the container:
-
-```bash
-claude mcp add --scope user --transport http graphiti http://graphiti:8000/mcp
-```
-
-`/mcp` should now list `graphiti` as connected, offering `add_memory`, `search_nodes`,
-`search_memory_facts`, `get_episodes`, `get_entity_edge`, `delete_entity_edge`, `delete_episode`,
-`clear_graph` and `get_status`.
-
-`http://graphiti:8000` is the compose network's own name for the server, which is why nothing here
-depends on `WORKSPACE_HOST` or on a published port.
-
-Both services do publish one anyway, for reaching them from the host: Bolt on `127.0.0.1:7688`
-and the MCP server on `127.0.0.1:8010`. Loopback only, and both moved off their conventional
-defaults — 7687 and 8000 are the ports everything else on a developer machine wants, and a
-collision would take the jail's memory down with it. `SLATER_BOLT_PORT` and `GRAPHITI_PORT` move
-them again if even those are taken.
-
 Run these three commands **from the host, not from inside the jail.** The jail's `docker` talks to
 the host's daemon, so the bind mounts under `memory/` would be resolved as host paths and come up
 empty — see [Docker access](#docker-access).
+
+Then register the server with Claude Code, once, from inside the jail — see
+[Registering it with Claude Code](#registering-it-with-claude-code).
+
+### The MCP server
+
+`graphiti` is Graphiti's own MCP server, unforked, speaking streamable HTTP. It offers nine tools:
+
+| Tool | What it does |
+| --- | --- |
+| `add_memory` | The way in. Takes a `name` and an `episode_body`, plus an optional `source` of `text`, `message` or `json`. |
+| `search_nodes` | Finds *entities* — the people, preferences, organisations and so on that were extracted. Optionally filtered by `entity_types`. |
+| `search_memory_facts` | Finds *relationships* — the facts connecting those entities, each with the episode it came from. `center_node_uuid` re-ranks by distance from one node. |
+| `get_episodes` | The raw episodes as they were submitted, most recent first. |
+| `get_entity_edge` | One fact by uuid. |
+| `delete_entity_edge` | Forgets one fact. See the note below — this one is expected to fail. |
+| `delete_episode` | Forgets one episode by uuid. |
+| `clear_graph` | Everything in the named groups, gone. |
+| `get_status` | Whether the server is up and the graph reachable. The cheap first thing to try. |
+
+Three things about it are worth knowing before you rely on it:
+
+**`add_memory` returns before the memory exists.** It queues the episode and answers
+`Episode 'x' queued for processing` straight away. The work — Claude extracting entities and
+relationships, Voyage embedding them, Slater storing them — happens behind that, and episodes
+sharing a `group_id` are processed one at a time so they cannot race. So a memory added and
+immediately searched for may not be there yet; a few seconds later it is. Once it *is* written it
+is searchable at once, with no consolidation step in between.
+
+**Everything lands in one group.** `group_id: main`, from `memory/mcp/config.yaml`, is the default
+for both writing and searching, so all sessions and all workspaces share a single memory. Pass an
+explicit `group_id` to partition it — per project, say — remembering that the searches take
+`group_ids` and default to `main` too.
+
+**`delete_entity_edge` does not work, deliberately.** Slater refuses a keyed relationship delete,
+and the keyless form it does accept cannot spare that edge's siblings — Graphiti writes several
+facts between the same pair of entities. Failing loudly beats deleting the wrong facts, so the
+adapter declines it and Graphiti's own statement runs and errors. `delete_episode` and
+`clear_graph` both work.
+
+Search is hybrid: BM25 full text and vector similarity, both served by Slater, fused into one
+ranking. Entity extraction is typed — `Person`, `Preference`, `Requirement`, `Procedure`,
+`Location`, `Event`, `Organization`, `Document`, `Topic`, `Object` — and those names are declared
+in `memory/mcp/config.yaml`. Adding one to that list means rebuilding the graph, because a label
+only enters Slater's symbol table through a seed row.
+
+### Registering it with Claude Code
+
+From inside the jail:
+
+```bash
+claude mcp add --transport http --scope user graphiti http://graphiti:8000/mcp
+```
+
+Once ever, not once per session. `--scope user` writes it to `.claude.json`, which
+`CLAUDE_CONFIG_DIR` puts inside the `./.claude` bind mount — so it is on your host the moment it
+is written and every later container starts with it already there. It also applies in every
+working directory, which the default scope (`local`, keyed to one directory) does not, and it
+keeps the entry out of your source tree, which `--scope project` would not: that one writes an
+`.mcp.json` into `/workspace`, i.e. into whatever repository you mounted.
+
+Check it:
+
+```bash
+claude mcp list          # graphiti ... ✓ Connected
+```
+
+…or `/mcp` inside a session, which lists the tools as well. To remove it:
+
+```bash
+claude mcp remove --scope user graphiti
+```
+
+`http://graphiti:8000` is the compose network's own name for the server, which is why this needs
+no published port and does not change with `WORKSPACE_HOST`. It resolves only while the memory
+stack is up; with the stack down, Claude Code reports `graphiti` as failing to connect and
+otherwise runs normally.
+
+> **The endpoint is `/mcp`, not `/mcp/` — and the server's own startup log tells you the wrong
+> one.** It prints `MCP Endpoint: http://localhost:8000/mcp/`, but `/mcp/` answers `307` with a
+> redirect to `/mcp` and some clients will not replay a POST across a redirect. If the server
+> appears to connect and every call then fails, check this first.
+
+#### From the host, too
+
+Both services publish a loopback port, so a Claude Code running on the host — outside the jail —
+can share the same memory:
+
+```bash
+claude mcp add --transport http --scope user graphiti http://localhost:8010/mcp
+```
+
+Bolt is on `127.0.0.1:7688` alongside it, for cypher-shell or any Neo4j driver. Both are moved off
+their conventional numbers on purpose: 7687 and 8000 are the ports everything else on a developer
+machine wants, and a collision would take the jail's memory down with it. `SLATER_BOLT_PORT` and
+`GRAPHITI_PORT` move them again if even those are taken.
+
+Use `localhost` and not `127.0.0.1` here. The server checks the `Host` header against an
+allow-list that holds both, so either connects — but see below for what that allow-list costs from
+inside the jail.
+
+### Try it
+
+Tell Claude something worth keeping:
+
+> Remember that I prefer TypeScript over JavaScript for new projects, and that I work at Acme
+> Corp.
+
+Then, in a later session:
+
+> What do you know about my preferences?
+
+The first call extracts entities on Claude, embeds them on Voyage and persists nodes and edges
+into Slater. The second searches. You can watch both happen:
+
+```bash
+docker compose --profile memory logs -f graphiti slater
+```
 
 ### Why the server needed one patch
 
@@ -341,14 +439,6 @@ So `memory/mcp/jail_patches.py` wraps `FastMCP.__init__` to seed the allow-list 
 branch decides for itself. The protection stays **on**: it gains the names this compose file
 publishes the server under, and nothing else. It is applied from `sitecustomize.py`, next to
 the rebindings that point the server at Slater and at Bedrock.
-
-> **The endpoint is `/mcp`, not `/mcp/` — and the server's own startup log tells you the wrong
-> one.** It prints `MCP Endpoint: http://localhost:8000/mcp/`, but `/mcp/` answers `307` with a
-> redirect to `/mcp` and some clients will not replay a POST across a redirect. If the server
-> appears to connect and every call then fails, check this first.
-
-Try it by telling Claude something worth keeping — "remember that I prefer TypeScript for new
-projects" — and asking about it in a later session.
 
 ### Seeding is a separate command, and `up` must never do it
 
