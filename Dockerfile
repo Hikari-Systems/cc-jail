@@ -13,6 +13,16 @@ ARG CLAUDE_GID=1000
 # started from an image built with a stale value still works.
 ARG DOCKER_GID=999
 
+# Claude Code updates itself in place, so the directory it lives in has to be
+# writable by the user that runs it. npm's default global prefix here is /usr,
+# which root owns -- so every update attempt fails ("npm global folder isn't
+# writable", "No write permissions for auto-updates") and the version baked
+# into the image is the version you are stuck on. Point npm's global prefix at
+# the container user's own home instead: every `npm install --global` below
+# lands there, and the updater can write to it at run time.
+ENV NPM_CONFIG_PREFIX=/home/claude/.npm-global
+ENV PATH=/home/claude/.npm-global/bin:$PATH
+
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends \
 		bash \
@@ -27,7 +37,6 @@ RUN apt-get update \
 		sudo \
 	&& curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 	&& apt-get install -y --no-install-recommends nodejs \
-	&& npm install --global @anthropic-ai/claude-code \
 	&& install -m 0755 -d /etc/apt/keyrings \
 	&& curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc \
 	&& chmod a+r /etc/apt/keyrings/docker.asc \
@@ -75,10 +84,25 @@ RUN apt-get update \
 		> /etc/apt/sources.list.d/github-cli.list \
 	&& apt-get update \
 	&& apt-get install -y --no-install-recommends gh \
-	# Linear's own CLI (command: "lin") and a ClickUp CLI (command: "cup").
-	# ClickUp publishes no official CLI, so this is the most widely used
-	# third-party one; swap the package if you prefer another.
-	&& npm install --global @linear/cli @krodak/clickup-cli \
+	# Every --global install happens here, after useradd, so npm's prefix (set
+	# above) lands in a /home/claude that already exists and belongs to the
+	# container user rather than to root. Alongside Claude Code: Linear's own
+	# CLI (command: "lin") and a ClickUp CLI (command: "cup"). ClickUp
+	# publishes no official CLI, so this is the most widely used third-party
+	# one; swap the package if you prefer another.
+	&& npm install --global \
+		@anthropic-ai/claude-code \
+		@linear/cli \
+		@krodak/clickup-cli \
+	# That prefix is only on PATH through this image's ENV, and forwarding the
+	# host environment into the container (see the README) replaces PATH along
+	# with everything else. Symlink the shims into a directory that is on every
+	# PATH, so `claude`, `lin` and `cup` resolve either way.
+	&& for shim in /home/claude/.npm-global/bin/*; do \
+		ln -sf "$shim" "/usr/local/bin/$(basename "$shim")"; \
+	done \
+	# npm ran as root, so the tree it just wrote is root's. Hand it back.
+	&& chown -R "${CLAUDE_UID}:${CLAUDE_GID}" /home/claude \
 	&& chmod 755 /home/claude \
 	&& rm -rf /var/lib/apt/lists/*
 

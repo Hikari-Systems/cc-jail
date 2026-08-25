@@ -266,6 +266,11 @@ After editing the `Dockerfile`, changing `UID`/`GID`, or to pick up a newer Clau
 docker compose build --no-cache
 ```
 
+Claude Code can also update itself in place: npm's global prefix is `/home/claude/.npm-global`,
+inside the container user's own home, so the updater has somewhere it can write. That home is not
+a mounted volume, though, so such an update lasts only as long as the container — rebuilding is
+still what moves the version baked into the image forward.
+
 ## What's in the box
 
 - `Dockerfile` — Ubuntu 26.04 + Node 22 + `@anthropic-ai/claude-code`, plus `git`, `jq`, `curl`,
@@ -292,6 +297,11 @@ docker compose build --no-cache
   shipping them in the repo means they exist, owned by whoever cloned. `.config/git/` is kept for
   the plainer reason that a directory you have to `mkdir` first is a step in the setup, and this
   one no longer is.
+- Global npm packages install to `/home/claude/.npm-global` (`NPM_CONFIG_PREFIX`), not to npm's
+  default prefix of `/usr`. Anywhere `root` owns leaves Claude Code unable to update itself, which
+  it reports as "npm global folder isn't writable" / "No write permissions for auto-updates". The
+  shims are symlinked into `/usr/local/bin` too, so `claude`, `lin` and `cup` still resolve when a
+  forwarded host `PATH` replaces the image's own.
 - `HOME` is pinned to `/home/claude` in `docker-compose.yml`. Forwarding the host environment
   (`--env-from-file <(env)`, or a bare `-e HOME`) otherwise carries the host's `HOME` in, and every
   tool that resolves a dotfile through it — git, ssh, `gh`, npm — then reads from a directory that
