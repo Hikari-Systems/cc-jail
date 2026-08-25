@@ -35,6 +35,7 @@ RUN apt-get update \
 		openssh-client \
 		procps \
 		sudo \
+		unzip \
 	&& curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 	&& apt-get install -y --no-install-recommends nodejs \
 	&& install -m 0755 -d /etc/apt/keyrings \
@@ -84,6 +85,68 @@ RUN apt-get update \
 		> /etc/apt/sources.list.d/github-cli.list \
 	&& apt-get update \
 	&& apt-get install -y --no-install-recommends gh \
+	#
+	# ── Cloud and editor CLIs ────────────────────────────────────────────
+	#
+	# Two architectures to name, and each vendor spells them differently, so
+	# the mapping is done once here: dpkg's own names on the left, and on the
+	# right what AWS, VS Code and Pulumi call the same machines.
+	&& case "$(dpkg --print-architecture)" in \
+		amd64) AWS_ARCH=x86_64; ALT_ARCH=x64 ;; \
+		arm64) AWS_ARCH=aarch64; ALT_ARCH=arm64 ;; \
+		*) echo "unsupported architecture: $(dpkg --print-architecture)" >&2; exit 1 ;; \
+	esac \
+	# AWS CLI v2, which is not in apt at all -- Amazon ships it only as this
+	# bundle. --bin-dir and --install-dir are spelled out because the default
+	# for the second one is /usr/local/aws-cli anyway but the first defaults
+	# relative to the extracted directory, which is about to be deleted.
+	&& curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-${AWS_ARCH}.zip" -o /tmp/awscliv2.zip \
+	&& unzip -q /tmp/awscliv2.zip -d /tmp \
+	&& /tmp/aws/install --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli \
+	&& rm -rf /tmp/awscliv2.zip /tmp/aws \
+	# Azure CLI, from Microsoft's apt repo. Same shape as docker's above and
+	# for the same reason: packages.microsoft.com lags new Ubuntu releases, so
+	# fall back to the latest LTS suite when this one's codename is absent.
+	&& curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
+		-o /etc/apt/keyrings/microsoft.asc \
+	&& chmod a+r /etc/apt/keyrings/microsoft.asc \
+	&& AZURE_SUITE="$(. /etc/os-release && echo "$VERSION_CODENAME")" \
+	&& if ! curl -fsIL "https://packages.microsoft.com/repos/azure-cli/dists/${AZURE_SUITE}/Release" >/dev/null 2>&1; then \
+		AZURE_SUITE=noble; \
+	fi \
+	&& echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/microsoft.asc] https://packages.microsoft.com/repos/azure-cli ${AZURE_SUITE} main" \
+		> /etc/apt/sources.list.d/azure-cli.list \
+	&& apt-get update \
+	&& apt-get install -y --no-install-recommends azure-cli \
+	# Pulumi, as the tarball its own installer script would fetch -- skipping
+	# the script because it installs into $HOME/.pulumi/bin, which is neither
+	# on PATH nor owned by root at this point in the build. The tarball holds
+	# the pulumi binary plus its per-language plugin helpers, and they all have
+	# to travel together, so the whole directory goes to /usr/local/bin.
+	#
+	# Unpinned, like every other version in this image: it takes whatever is
+	# current when you build. Pin it by replacing the lookup with a literal.
+	&& PULUMI_VERSION="$(curl -fsSL https://www.pulumi.com/latest-version)" \
+	&& curl -fsSL "https://get.pulumi.com/releases/sdk/pulumi-v${PULUMI_VERSION}-linux-${ALT_ARCH}.tar.gz" \
+		| tar -xz -C /tmp \
+	&& mv /tmp/pulumi/* /usr/local/bin/ \
+	&& rmdir /tmp/pulumi \
+	# The VS Code CLI: the `code` command on its own, without the editor.
+	# There is no GUI in here, so `code .` has nothing to open -- what this is
+	# for is `code tunnel`, which serves this container to a VS Code window
+	# elsewhere, and `code serve-web`, which serves it to a browser.
+	#
+	# The alpine build on purpose: it is the statically linked one, so it has
+	# no musl or glibc opinion and runs here unchanged. Microsoft publishes no
+	# separate glibc build of the CLI (`os=cli-linux-x64` is a 404).
+	#
+	# A tunnel's login lives in ~/.vscode-cli, which is inside the container
+	# and not one of the mounted directories, so it is gone with the container
+	# unless you mount it.
+	&& curl -fsSL "https://code.visualstudio.com/sha/download?build=stable&os=cli-alpine-${ALT_ARCH}" \
+		-o /tmp/vscode-cli.tar.gz \
+	&& tar -xzf /tmp/vscode-cli.tar.gz -C /usr/local/bin code \
+	&& rm -f /tmp/vscode-cli.tar.gz \
 	# Every --global install happens here, after useradd, so npm's prefix (set
 	# above) lands in a /home/claude that already exists and belongs to the
 	# container user rather than to root. Alongside Claude Code: Linear's own
