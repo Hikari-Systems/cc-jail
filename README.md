@@ -502,7 +502,8 @@ still what moves the version baked into the image forward.
   unless you mount them. Creates a `claude` user matched to your host UID/GID so files written in
   the container are owned by you on the host.
 - `docker-compose.yml` — the `claude` service: builds the image, wires up the volume mounts, joins
-  the host's docker-socket group, and starts Claude Code in `/workspace`.
+  the host's docker-socket group, and starts Claude Code in `/workspace`. Then `slater-seed`,
+  `slater` and `graphiti`, all profile-gated and inert unless asked for; see [Memory](#memory).
 - `.env.example` — the settings above, with comments.
 - `.claude/` — Claude Code's state on the host: credentials, settings, and session history. Only
   `.gitkeep` is tracked; the rest is gitignored. `CLAUDE_CONFIG_DIR` points Claude Code here, which
