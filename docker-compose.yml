@@ -22,6 +22,13 @@ services:
       # would sit at $HOME and need its own file mount, which Docker creates
       # as a *directory* when it is missing, and Claude Code won't start.
       CLAUDE_CONFIG_DIR: /home/claude/.claude
+      # Claude Code's cross-session messaging socket is created under
+      # XDG_RUNTIME_DIR. The host's value leaks in through the environment, but
+      # /run/user/<uid> only exists where systemd-logind made it -- in here /run
+      # belongs to root, so the socket directory cannot be created and the
+      # feature switches itself off ("its socket directory could not be set
+      # up"). Set it explicitly at the tmpfs mounted below.
+      XDG_RUNTIME_DIR: /run/user/${UID:-1000}
     working_dir: /workspace
     volumes:
       # Host tree Claude can see. Override with WORKSPACE_HOST / WORKSPACE_PATH
@@ -33,5 +40,11 @@ services:
       - ./.claude:/home/claude/.claude
       # Host Docker daemon. Note: this grants root-equivalent access to the host.
       - /var/run/docker.sock:/var/run/docker.sock
+    # Backs XDG_RUNTIME_DIR above. The messaging socket needs a directory that
+    # is owned by the container user and private (0700), so uid/gid/mode are
+    # spelled out -- a bare tmpfs would come up as root's. tmpfs rather than a
+    # volume because this is per-run scratch that should die with the container.
+    tmpfs:
+      - "/run/user/${UID:-1000}:uid=${UID:-1000},gid=${GID:-1000},mode=0700"
     stdin_open: true
     tty: true
