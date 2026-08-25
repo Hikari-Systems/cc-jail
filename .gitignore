@@ -8,6 +8,11 @@
 .config/*
 !.config/.gitkeep
 
+# ssh config and known_hosts for the container. Same reasoning again -- and
+# nothing in here should ever reach a remote.
+.ssh/*
+!.ssh/.gitkeep
+
 # Default workspace mount; same reasoning.
 cc-jail/*
 !cc-jail/.gitkeep

@@ -30,7 +30,8 @@ services:
         export HOME=/home/claude
         CLAUDE_CONFIG_DIR=/home/claude/.claude
         XDG_CONFIG_HOME=/home/claude/.config
-        XDG_RUNTIME_DIR=/run/user/${UID:-1000};
+        XDG_RUNTIME_DIR=/run/user/${UID:-1000}
+        SSH_AUTH_SOCK=/run/ssh-agent.sock;
         exec "$$@"
       - sh
     environment:
@@ -57,6 +58,11 @@ services:
       # feature switches itself off ("its socket directory could not be set
       # up"). Set it explicitly at the tmpfs mounted below.
       XDG_RUNTIME_DIR: /run/user/${UID:-1000}
+      # The host's ssh-agent, reached through the socket mounted below, so
+      # git can push over ssh without a private key ever entering the
+      # container. The host's own value leaks in and names a path that is not
+      # mounted, so this has to be stated (and re-exported in the entrypoint).
+      SSH_AUTH_SOCK: /run/ssh-agent.sock
     working_dir: /workspace
     volumes:
       # Host tree Claude can see. Override with WORKSPACE_HOST / WORKSPACE_PATH
@@ -71,6 +77,17 @@ services:
       # lock file over it, which fails with EBUSY on a bind-mounted *file* but
       # is an ordinary rename inside a bind-mounted *directory*.
       - ./.config:/home/claude/.config
+      # ssh config and known_hosts, so a host key accepted once is still
+      # accepted next run. Private keys do not belong here -- the agent below
+      # is what does the signing. Ships as .ssh/.gitkeep.
+      - ./.ssh:/home/claude/.ssh
+      # The host's ssh-agent socket (see SSH_AUTH_SOCK above). The agent only
+      # signs; it never hands over key material -- but it will sign anything
+      # the container asks it to, with every key it holds. Falls back to
+      # /dev/null, an existing path Docker will not turn into a directory,
+      # when the host has no agent running. Kept out of ./.ssh so Docker does
+      # not leave a stray mountpoint file inside that directory on the host.
+      - "${SSH_AUTH_SOCK:-/dev/null}:/run/ssh-agent.sock"
       # Host Docker daemon. Note: this grants root-equivalent access to the host.
       - /var/run/docker.sock:/var/run/docker.sock
     # Backs XDG_RUNTIME_DIR above. The messaging socket needs a directory that

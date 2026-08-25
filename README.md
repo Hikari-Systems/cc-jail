@@ -28,6 +28,9 @@ Either way you get a bash shell in `/workspace` with `claude` on the `PATH`. The
 invocation walks you through logging in; credentials are written to `.claude/` in this repo, so
 later runs start straight up.
 
+Give it a git identity and an ssh agent once and it can commit and push too — see
+[Git identity](#git-identity) and [SSH agent](#ssh-agent).
+
 Nothing else needs setting up — the mount points ship with the repo, and `--rm` means each session
 leaves no stopped container behind. If you want the agent making commits, give it a git identity
 once: see [Git identity](#git-identity).
@@ -81,8 +84,8 @@ With `-e NAME` and no value, Compose reads `NAME` from the host environment.
 Either form outranks the `environment:` block in `docker-compose.yml`, so forwarding wholesale would
 otherwise overwrite the paths this setup depends on — `HOME` above all, which the host always sets
 and which points at a directory that does not exist in here. The service entrypoint re-exports
-`HOME`, `CLAUDE_CONFIG_DIR`, `XDG_CONFIG_HOME` and `XDG_RUNTIME_DIR` inside the container, after
-any `-e` has been applied, so those four survive.
+`HOME`, `CLAUDE_CONFIG_DIR`, `XDG_CONFIG_HOME`, `XDG_RUNTIME_DIR` and `SSH_AUTH_SOCK` inside the
+container, after any `-e` has been applied, so those five survive.
 
 ### Where your code is mounted
 
@@ -200,6 +203,37 @@ It has to be a directory mount rather than a `./gitconfig:/home/claude/.gitconfi
 `git config` rewrites the file by renaming a lock file over it, and renaming over a bind-mounted
 *file* fails with `Device or resource busy`. Reads would work; the first write would not.
 
+## SSH agent
+
+Pushing over ssh needs a key, and putting one in the container would undo the point of the
+container. The host's **ssh-agent socket** is mounted instead, at `/run/ssh-agent.sock`, with
+`SSH_AUTH_SOCK` pointed at it. The agent signs on the container's behalf; no private key ever
+crosses the boundary, and nothing persists if you stop mounting it.
+
+It works as soon as the host has an agent running — `${SSH_AUTH_SOCK}` in `docker-compose.yml`
+reads the host's own value:
+
+```bash
+ssh-add -l    # on the host: lists the keys the container will be able to use
+```
+
+Inside, `ssh -T git@github.com` should greet you by name. If it doesn't, check `ssh-add -l` on the
+host first; an empty agent forwards nothing. With no agent running at all, the mount falls back to
+`/dev/null` and ssh reports `Error connecting to agent: Connection refused` — everything else still
+works.
+
+`.ssh/` in this repo is mounted at `/home/claude/.ssh`, which is where ssh writes `known_hosts` on
+first connection and where an ssh `config` goes if you want one — so a host key accepted once is
+still accepted next run. Like the other mounts it ships as `.gitkeep` and its contents are
+gitignored: no keys, no `known_hosts`, nothing personal heading for a remote.
+
+**What this gives away.** Agent forwarding doesn't leak key material, but for as long as the
+container runs it can ask the agent to sign *anything*, with *every* key the agent holds — pushes
+to unrelated repositories, logins to other hosts. That is a weaker boundary than the rest of this
+setup, though a much stronger one than mounting `~/.ssh`. Narrow it by loading only the key you
+need (`ssh-add -D`, then add that one), or drop the socket line from `docker-compose.yml` and push
+from the host.
+
 ## Docker access
 
 `/var/run/docker.sock` is mounted in, and the container ships the Docker CLI, buildx and compose
@@ -243,6 +277,8 @@ docker compose build --no-cache
 - `.config/` — per-user CLI config inside the container: your git identity at `.config/git/config`,
   plus whatever else follows `XDG_CONFIG_HOME` (`gh`, for one). Tracked only as `.gitkeep`; see
   [Git identity](#git-identity).
+- `.ssh/` — `known_hosts`, written on first connection, and any ssh `config` for the container.
+  Tracked only as `.gitkeep`; no keys go here, see [SSH agent](#ssh-agent).
 - `cc-jail/` — the default, empty `WORKSPACE_HOST`. Also tracked only as `.gitkeep`.
 
 ## Notes
