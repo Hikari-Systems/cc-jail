@@ -1,0 +1,142 @@
+# Graphiti MCP server configuration.
+#
+# `provider: neo4j` is not a claim that Slater is Neo4j — it is how the stock server
+# is made to take the Bolt path, whose driver name `sitecustomize.py` has rebound to
+# SlaterDriver. The server's factory hard-matches only 'neo4j' and 'falkordb', so
+# this is the available door.
+#
+# NOTE ON SHAPE: `model`, `max_tokens`, `temperature` and `dimensions` belong to the
+# **section**, not to the provider block under it. The factory reads `config.model`,
+# never `config.providers.<name>.model`. Nesting them one level deeper parses
+# happily, applies nothing, and leaves you on the defaults — `gpt-4o-mini` and 1536
+# dimensions — with no error anywhere.
+
+server:
+  transport: http
+  host: 0.0.0.0
+  port: 8000
+
+database:
+  provider: neo4j
+  providers:
+    neo4j:
+      uri: ${NEO4J_URI}
+      username: ${NEO4J_USER}
+      password: ${NEO4J_PASSWORD}
+      # Slater's ACL grants this user exactly one graph. The neo4j driver puts
+      # `database_` inside the parameters rather than on the Bolt RUN, so the RUN
+      # carries no `db` field and Slater falls through to the user's single readable
+      # graph — which selects correctly, permanently, without this having to agree
+      # with anything.
+      database: graphiti
+
+llm:
+  # Claude, reached through **AWS Bedrock** rather than the Anthropic API directly.
+  # `anthropic` is the provider the factory understands; hs_memory_patches/bedrock.py
+  # rebinds the client behind it to one that signs AWS requests. Everything above the
+  # transport — tool-based structured output, retries, token accounting — is
+  # graphiti's own code, unchanged.
+  provider: anthropic
+  # A Bedrock model id, not an Anthropic one, and a **local** (region-native) one:
+  # `anthropic.…` with no geography prefix, invoked on-demand.
+  #
+  # Not every model can be called this way. `list_foundation_models` reports an
+  # `inferenceTypesSupported` per model, and one that is INFERENCE_PROFILE-only —
+  # claude-sonnet-4-5 and claude-haiku-4-5 among them — rejects its own bare id with
+  # a 400 ("invocation with on-demand throughput isn't supported") and can only be
+  # reached through a geo-prefixed inference profile. Verified by invoking, not by
+  # reading: this id returns a completion in this account and region.
+  model: anthropic.claude-sonnet-4-6
+  # Keep this set. Graphiti's per-model output-token table is keyed on Anthropic's own
+  # model names, so a Bedrock id misses it and falls back to a default rather than
+  # erroring. An explicit value takes precedence over the lookup, so the table is
+  # never consulted.
+  max_tokens: 8192
+  temperature: 0.0
+  providers:
+    anthropic:
+      # Unused. Bedrock authenticates with AWS credentials from the ambient chain
+      # (environment, shared config, or the container/task role), so no key is read
+      # from here — but the stock factory rejects an empty one before the client is
+      # ever constructed, so it has to be non-empty.
+      api_key: unused-bedrock-authenticates-with-aws-credentials
+
+embedder:
+  provider: voyage
+  model: voyage-3
+  # Load-bearing in both directions. VoyageAIEmbedder truncates to it
+  # (`[: embedding_dim]`) and the stock default is 1536 — a silent no-op against
+  # voyage-3's native 1024 that would leave every vector full-width. It must also
+  # equal the dimension the graph was built at (`gen_schema.py --dim`); Slater
+  # hard-errors on a mismatch at write time, which is the safety net rather than the
+  # interface.
+  dimensions: 1024
+  providers:
+    voyage:
+      api_key: ${VOYAGE_API_KEY}
+
+graphiti:
+  group_id: main
+  # Communities exercise HAS_MEMBER, whose FalkorDB save has a label-less endpoint
+  # that Slater's relationship write does not accept. Left off deliberately rather
+  # than left to fail.
+  build_communities: false
+
+  # These have to be declared here, and the server's own log line misleads about it:
+  # with no `entity_types` it prints "Using default entity types", which sounds like a
+  # built-in set is in force. It is the *else* branch — `custom_types` stays `None`,
+  # graphiti is passed no types, and every extracted node is written with the bare
+  # `Entity` label and nothing else. The server does ship a registry of these models
+  # (`src/models/entity_types.py`), but **nothing imports it**; the config file is the
+  # only route. Without this block a real `add_memory` persists entities that are
+  # untyped, which is silent — the write succeeds and the labels simply never appear.
+  #
+  # The names must match `MCP_ENTITY_TYPES` in `schema/gen_schema.py`, because graphiti
+  # applies them as a second label (`SET n:Person`) and a label enters Slater's symbol
+  # table only through a seed instance. They already do, so this needs no rebuild —
+  # but **adding a name that is not in the seed does**, which is the operational
+  # constraint the README calls out.
+  #
+  # Only `name` and `description` are read (the factory builds a bare Pydantic model
+  # carrying the description as its docstring), so the description *is* the
+  # classification prompt. These are the shipped registry's own wording, with `Person`
+  # added — the seed carries that label and the dead registry omits it.
+  entity_types:
+    - name: Person
+      description: >-
+        A Person represents an individual human being — named people, their roles and
+        their relationships to other entities. Use this for any specific, identifiable
+        person rather than a generic reference to people.
+    - name: Preference
+      description: >-
+        IMPORTANT: Prioritize this classification over ALL other classifications. A
+        Preference represents a user's expressed like, dislike, choice or rejection.
+        Trigger patterns include "I want/like/prefer/choose X", "I don't want/dislike/
+        avoid/reject Y", "X is better/worse", "rather have X than Y".
+    - name: Requirement
+      description: >-
+        A Requirement represents a specific need, feature, or functionality that a
+        product or service must fulfill.
+    - name: Procedure
+      description: >-
+        A Procedure informing the agent what actions to take or how to perform in
+        certain scenarios. Procedures are typically composed of several steps.
+    - name: Location
+      description: >-
+        A Location represents a physical or virtual place where activities occur or
+        entities exist.
+    - name: Event
+      description: >-
+        An Event represents a time-bound activity, occurrence, or experience.
+    - name: Organization
+      description: >-
+        An Organization represents a company, institution, group, or formal entity.
+    - name: Document
+      description: >-
+        A Document represents information content in various forms.
+    - name: Topic
+      description: >-
+        A Topic represents a subject of conversation, interest, or knowledge domain.
+    - name: Object
+      description: >-
+        An Object represents a physical item, tool, device, or possession.

@@ -105,3 +105,189 @@ services:
       - "/run/user/${UID:-1000}:uid=${UID:-1000},gid=${GID:-1000},mode=0700"
     stdin_open: true
     tty: true
+
+  # ── Memory: Graphiti's knowledge graph, stored in Slater ────────────────────
+  #
+  # Both services sit behind the `memory` profile, so nothing below runs unless it
+  # is asked for and `docker compose run --rm claude` stays exactly as it was. Bring
+  # them up alongside the jail:
+  #
+  #   docker compose --profile seed run --rm slater-seed   # ONCE -- builds the graph
+  #   docker compose --profile memory up -d graphiti
+  #   docker compose run --rm claude
+  #
+  # Compose puts every service in this file on the same project network, so the jail
+  # reaches the server at http://graphiti:8000/mcp -- no published port involved, and
+  # nothing to reconfigure when WORKSPACE_HOST changes. Register it once, inside the
+  # container (see README.md):
+  #
+  #   claude mcp add --scope user --transport http graphiti http://graphiti:8000/mcp
+  #
+  # Deliberately NOT a `depends_on:` of `claude`. Compose starts a named service's
+  # dependencies whatever profile they carry, so that one line would drag the whole
+  # stack -- and its need for AWS and Voyage credentials -- into every plain run.
+
+  # One-shot: compile the graph from the seed dump, then exit.
+  #
+  # Slater serves *compiled generations*. Indexes are declared when a graph is built,
+  # never created at runtime, and a label enters the symbol table only through an
+  # actual node -- so the graph, its indexes and one seed row per label all have to
+  # exist before Graphiti ever connects. ./memory/schema/graphiti-schema.cypher is
+  # that dump, generated from graphiti-core by gen_schema.py beside it.
+  #
+  # **Its own profile, and no `depends_on` anywhere, because re-running it against a
+  # live graph loses data silently.** A build publishes a new generation underneath
+  # the running server; the write delta is bound to the generation it was written
+  # against, so Slater goes on accepting writes and never reads them back. An
+  # unseeded data directory fails loudly at boot instead, which is the trade worth
+  # having. Run it deliberately:
+  #
+  #   docker compose --profile seed run --rm slater-seed
+  slater-seed:
+    image: ${SLATER_IMAGE:-hikarisystems/slater:v0.25.2}
+    profiles: ['seed']
+    restart: 'no'
+    entrypoint: ['/app/slater-build']
+    command:
+      - '--input'
+      - '/schema/graphiti-schema.cypher'
+      - '--graph'
+      - 'graphiti'
+      - '--data-dir'
+      - '/data'
+      # Stamps the ACL's BLAKE3 into the manifest, so a generation and the ACL it was
+      # built against travel together and cannot be silently mismatched. Editing
+      # ./memory/acl/acl.json therefore means re-running this.
+      - '--acl'
+      - '/acl/acl.json'
+    volumes:
+      - 'slater-data:/data'
+      - './memory/schema:/schema:ro'
+      - './memory/acl:/acl:ro'
+
+  # The graph database itself.
+  slater:
+    image: ${SLATER_IMAGE:-hikarisystems/slater:v0.25.2}
+    profiles: ['memory']
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run
+    volumes:
+      - './memory/acl:/acl:ro'
+      # Writable, unlike a read-only Slater deployment: the write delta flushes L0
+      # segments here and consolidation publishes new generations here.
+      - 'slater-data:/data'
+      # The durability floor. A real named volume, **never tmpfs**: tmpfs is RAM, so
+      # a tmpfs WAL would make every acknowledged write a lie about durability.
+      - 'slater-wal:/wal'
+    ports:
+      # Loopback only, so the graph is reachable from this machine and from nowhere
+      # else -- which is what makes the published example password this ships with
+      # (memory/acl/README.md) acceptable, and nothing else does.
+      #
+      # And deliberately NOT 7687. That is the conventional Bolt port, so anything
+      # else on the host already speaking Bolt -- another Slater, a Neo4j -- owns it,
+      # and a collision here would take the jail's memory down with it. The container
+      # side stays 7687; only the host side moves.
+      #
+      # The jail does not use this at all: it reaches Slater at bolt://slater:7687
+      # over the compose network. This is for poking at the graph from the host with
+      # cypher-shell or any Neo4j driver.
+      - '127.0.0.1:${SLATER_BOLT_PORT:-7688}:7687'
+    environment:
+      server__bind: '0.0.0.0'
+      server__port: '7687'
+      dataBackend__fs__dir: '/data'
+      aclPath: '/acl/acl.json'
+      # The writable layer, and the whole point of this service being here: Graphiti
+      # is a write-heavy client, and without this Slater is read-only and every
+      # add_memory fails.
+      delta__enabled: 'true'
+      delta__walDir: '/wal'
+      # Bounded resident memory -- the reason Slater backs a memory graph at all.
+      # Resident is roughly these three budgets plus a small fixed overhead, whatever
+      # the graph grows to.
+      cache__blockCacheBytes: '268435456'   # 256 MiB
+      cache__vectorCacheBytes: '134217728'  # 128 MiB
+      cache__resultCacheBytes: '33554432'   # 32 MiB
+      # How a new generation is adopted. The default is `exit` -- log fatal and leave
+      # it to an orchestrator -- which suits a read-only replica in a fleet and is the
+      # wrong trade for the single writable node holding the WAL, where exiting means
+      # replaying it and dropping every connection. `swap` validates the incoming
+      # generation, swaps it in atomically, and keeps the current one serving if it
+      # cannot be validated.
+      reloadStrategy: 'swap'
+      log__level: 'info'
+    healthcheck:
+      # Exec form, and the binary directly: the image is distroless and has no shell
+      # for the string form to run. The probe speaks Bolt, not HTTP.
+      test: ['CMD', '/app/slater', 'healthcheck', '127.0.0.1', '7687']
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+  # Graphiti's MCP server, driving Slater.
+  #
+  # The stock published image plus a `sitecustomize.py`, which Python imports at
+  # interpreter startup and which rebinds the driver class the server constructs by
+  # name. `provider: neo4j` in memory/mcp/config.yaml is not a claim that Slater is
+  # Neo4j -- the server's factory hard-matches only 'neo4j' and 'falkordb', so that
+  # is the door the adapter goes through.
+  graphiti:
+    profiles: ['memory']
+    build:
+      context: ./memory/mcp
+    depends_on:
+      slater:
+        condition: service_healthy
+    ports:
+      # Loopback only and off 8000, for both of the reasons above -- 8000 being the
+      # port every other local server on this machine also wants. Again not what the
+      # jail uses; it is here so `curl 127.0.0.1:8010/mcp` can settle "is the server
+      # up" from the host.
+      - '127.0.0.1:${GRAPHITI_PORT:-8010}:8000'
+    environment:
+      # Claude through AWS Bedrock, so there is no Anthropic API key: botocore
+      # resolves credentials from the ambient chain. See memory/mcp/config.yaml to
+      # use a different provider.
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      # Every one of these is `:-` and not `:?` on purpose. Compose interpolates the
+      # whole file whatever service you name, so a required-variable guard here would
+      # fail `docker compose run --rm claude` -- the path that has nothing to do with
+      # memory and must keep working with no keys set at all. The server says clearly
+      # enough on its own when a key it needs is missing.
+      VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+      NEO4J_URI: 'bolt://slater:7687'
+      NEO4J_USER: 'graphiti'
+      NEO4J_PASSWORD: ${SLATER_PASSWORD:-graphiti-example}
+      # `sitecustomize.py` and `bedrock_patches` land here, so the interpreter imports
+      # them before anything constructs a driver or an LLM client. `src` is on the
+      # path because that is where the server's own modules resolve from. Set here as
+      # well as in the image so an override cannot silently drop the rebindings.
+      PYTHONPATH: '/app/mcp:/app/mcp/src'
+      # Read relative to the workdir (/app/mcp), so this is where it has to land.
+      CONFIG_PATH: '/app/mcp/config/config.yaml'
+      # The name the jail calls this server by, which the stock server would refuse:
+      # it turns on DNS-rebinding protection allowing only localhost, whatever address
+      # it then binds. memory/mcp/jail_patches.py reads this and adds these names to
+      # that allow-list rather than switching the protection off. Both spellings,
+      # because compose resolves the service name and the container name alike.
+      MCP_ALLOWED_HOSTS: 'graphiti:*,cc-jail-graphiti-1:*'
+    volumes:
+      - './memory/mcp/config.yaml:/app/mcp/config/config.yaml:ro'
+      # NOT read_only: uv's cache and the cross-encoder's weights both need a
+      # writable path.
+      - 'graphiti-cache:/root/.cache'
+
+volumes:
+  # The compiled graph: generations, and the write delta's flushed L0 segments.
+  slater-data:
+  # The write-ahead log. Durability lives here; losing this volume loses every write
+  # since the last consolidation.
+  slater-wal:
+  graphiti-cache:

@@ -258,6 +258,138 @@ host, so `-v /workspace/foo:/src` from inside the container will not find your c
 [Where your code is mounted](#where-your-code-is-mounted)) makes paths mean the same thing inside
 and out.
 
+## Memory
+
+Optionally, the jail can come with a memory: [Graphiti](https://github.com/getzep/graphiti)'s
+temporal knowledge graph, stored in [Slater](https://github.com/Hikari-Systems/slater) and exposed
+to Claude Code as an MCP server, so a preference stated in one session is still known in the next.
+The adapter that puts the one on the other is
+[graphiti-slater](https://github.com/Hikari-Systems/graphiti-slater), and everything under
+`memory/` is that project's runnable example, wired into this compose file.
+
+```
+┌────────────────┐   MCP over HTTP    ┌────────────┐   Bolt :7687   ┌────────┐
+│  claude (jail) │ ─────────────────► │  graphiti  │ ─────────────► │ slater │
+└────────────────┘  http://graphiti   └────────────┘                └────────┘
+                         :8000/mcp
+```
+
+It sits behind a compose profile, so a plain `docker compose run --rm claude` is untouched by any
+of it and still needs no credentials.
+
+### What you need
+
+- **An AWS account with Bedrock access**, able to invoke the model id in `memory/mcp/config.yaml`
+  (`anthropic.claude-sonnet-4-6`) on-demand in your region. This is what extracts entities from
+  what you tell it; there is no Anthropic API key involved, because the calls are signed as AWS
+  requests.
+- **A Voyage API key**, for embeddings.
+
+Both go in `.env` — see the memory block at the bottom of `.env.example`.
+
+### Starting it
+
+Build the graph once, then bring the stack up:
+
+```bash
+docker compose --profile seed run --rm slater-seed     # ONCE -- see below
+docker compose --profile memory up -d graphiti
+docker compose run --rm claude
+```
+
+Then, inside the jail, register the server with Claude Code — once ever, since `.claude/` is a
+bind mount that outlives the container:
+
+```bash
+claude mcp add --scope user --transport http graphiti http://graphiti:8000/mcp
+```
+
+`/mcp` should now list `graphiti` as connected, offering `add_memory`, `search_nodes`,
+`search_memory_facts`, `get_episodes`, `get_entity_edge`, `delete_entity_edge`, `delete_episode`,
+`clear_graph` and `get_status`.
+
+`http://graphiti:8000` is the compose network's own name for the server, which is why nothing here
+depends on `WORKSPACE_HOST` or on a published port.
+
+Both services do publish one anyway, for reaching them from the host: Bolt on `127.0.0.1:7688`
+and the MCP server on `127.0.0.1:8010`. Loopback only, and both moved off their conventional
+defaults — 7687 and 8000 are the ports everything else on a developer machine wants, and a
+collision would take the jail's memory down with it. `SLATER_BOLT_PORT` and `GRAPHITI_PORT` move
+them again if even those are taken.
+
+Run these three commands **from the host, not from inside the jail.** The jail's `docker` talks to
+the host's daemon, so the bind mounts under `memory/` would be resolved as host paths and come up
+empty — see [Docker access](#docker-access).
+
+### Why the server needed one patch
+
+The stock server builds its `FastMCP` object with no `host` argument and assigns
+`mcp.settings.host` from the config file afterwards. FastMCP auto-enables DNS-rebinding
+protection whenever the *constructor* host is a loopback one — which the default `127.0.0.1`
+is — and stamps in an allow-list of `localhost` and `127.0.0.1` only. Setting
+`server.host: 0.0.0.0` later changes what the socket binds to and nothing else, so the server
+listens everywhere and then answers `421 Invalid Host header` to anything that addressed it by
+any other name.
+
+Upstream never meets this, because its client is on the host and reaches a published port —
+the Host header genuinely *is* `localhost:8000`. The jail is another container calling
+`http://graphiti:8000/mcp`, which that allow-list rejects, and there is no config key,
+environment variable or flag that extends it.
+
+So `memory/mcp/jail_patches.py` wraps `FastMCP.__init__` to seed the allow-list from
+`MCP_ALLOWED_HOSTS` — set to `graphiti:*` in `docker-compose.yml` — before the auto-enable
+branch decides for itself. The protection stays **on**: it gains the names this compose file
+publishes the server under, and nothing else. It is applied from `sitecustomize.py`, next to
+the rebindings that point the server at Slater and at Bedrock.
+
+> **The endpoint is `/mcp`, not `/mcp/` — and the server's own startup log tells you the wrong
+> one.** It prints `MCP Endpoint: http://localhost:8000/mcp/`, but `/mcp/` answers `307` with a
+> redirect to `/mcp` and some clients will not replay a POST across a redirect. If the server
+> appears to connect and every call then fails, check this first.
+
+Try it by telling Claude something worth keeping — "remember that I prefer TypeScript for new
+projects" — and asking about it in a later session.
+
+### Seeding is a separate command, and `up` must never do it
+
+Slater serves *compiled generations*: indexes are declared when a graph is built, not created at
+runtime, and a label enters its symbol table only through an actual node. So the graph has to
+exist, with its indexes and one seed row per label, before Graphiti connects —
+`memory/schema/graphiti-schema.cypher` is that dump, generated from `graphiti-core` by
+`gen_schema.py` beside it.
+
+Running the seed against a graph that is already serving publishes a new generation underneath the
+live server, and the write delta — bound to the generation it was written against — is abandoned.
+Slater carries on accepting writes and never reads them back, so **the loss is silent**. That is
+why `slater-seed` has its own profile and no `depends_on` anywhere: nothing can reach it by
+accident, and an unseeded data directory fails loudly at boot instead.
+
+The graph must be rebuilt when `graphiti-core`'s schema changes, when the entity types in
+`memory/mcp/config.yaml` change, or when the embedder's dimension changes. On a graph already in
+use that is not a re-seed: consolidate first (`CALL slater.consolidate()`), then rebuild from a
+dump of the consolidated graph.
+
+**Never delete the seed rows.** They carry `group_id: '_slater_seed_'`, which no Graphiti call
+uses, so they are invisible to search — but a label leaves the symbol table with the last node
+carrying it, and every later write carrying that label then fails.
+
+### The password is a published one
+
+`memory/acl/acl.json` grants one user, `graphiti`, read and write on one graph, and ships the
+argon2id hash of `graphiti-example` — a throwaway, published in the upstream example on purpose so
+it runs with no setup. Both services bind their host ports to `127.0.0.1`, which is what makes
+that acceptable here and what would stop being true the moment either is bound to `0.0.0.0`.
+`memory/acl/README.md` says how to mint your own; the graph carries the ACL's fingerprint, so
+changing it means re-running `slater-seed`.
+
+### Stopping it
+
+```bash
+docker compose --profile memory down        # stop
+docker compose --profile memory down -v     # ...and delete the graph, the WAL and everything
+                                            #    Claude ever remembered
+```
+
 ## Rebuilding
 
 After editing the `Dockerfile`, changing `UID`/`GID`, or to pick up a newer Claude Code release:
@@ -291,6 +423,13 @@ still what moves the version baked into the image forward.
 - `.ssh/` — `known_hosts`, written on first connection, and any ssh `config` for the container.
   Tracked only as `.gitkeep`; no keys go here, see [SSH agent](#ssh-agent).
 - `cc-jail/` — the default, empty `WORKSPACE_HOST`. Also tracked only as `.gitkeep`.
+- `memory/` — the optional Graphiti-on-Slater memory stack: the seed schema and its generator,
+  Slater's ACL, and the Dockerfile, config and startup shims for Graphiti's MCP server. All of
+  it comes from [graphiti-slater](https://github.com/Hikari-Systems/graphiti-slater)'s own
+  runnable example, bar `mcp/jail_patches.py`, which is cc-jail's — see
+  [Why the server needed one patch](#why-the-server-needed-one-patch). The adapter itself is
+  not vendored: the Dockerfile installs it from a commit-pinned source archive. Inert unless
+  the `memory` profile is used; see [Memory](#memory).
 
 ## Notes
 

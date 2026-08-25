@@ -1,0 +1,8 @@
+{
+  "users": {
+    "graphiti": {
+      "passwordArgon2id": "$argon2id$v=19$m=19456,t=2,p=1$H6ZT++uG5IX1/36zda/+WA$OF/Dm/MheZ+Gq8MyULwsEaK48Sc+8ijen1BEvcyQq/8",
+      "grants": { "graphiti": ["read", "write"] }
+    }
+  }
+}
