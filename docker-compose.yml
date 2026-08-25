@@ -1,0 +1,37 @@
+services:
+  claude:
+    build:
+      context: .
+      args:
+        CLAUDE_UID: "${UID:-1000}"
+        CLAUDE_GID: "${GID:-1000}"
+        DOCKER_GID: "${DOCKER_GID:-999}"
+    image: cc-jail:local
+    # The socket's owning group is a property of the HOST, not of the image, so
+    # it is applied at run time as a supplementary group. This is what actually
+    # makes /var/run/docker.sock writable: it needs no rebuild when the host
+    # GID changes, and it rescues an image baked with a stale DOCKER_GID.
+    # Set DOCKER_GID in .env to the host's value (see .env.example):
+    #   stat -c '%g' /var/run/docker.sock
+    group_add:
+      - "${DOCKER_GID:-999}"
+    environment:
+      # Keeps every piece of Claude Code state -- .claude.json, credentials,
+      # settings, project history -- inside one directory, so the single
+      # ./.claude mount below covers all of it. Without this, .claude.json
+      # would sit at $HOME and need its own file mount, which Docker creates
+      # as a *directory* when it is missing, and Claude Code won't start.
+      CLAUDE_CONFIG_DIR: /home/claude/.claude
+    working_dir: /workspace
+    volumes:
+      # Host tree Claude can see. Override with WORKSPACE_HOST / WORKSPACE_PATH
+      # (see .env.example); add further mounts via docker-compose.override.yml.
+      - "${WORKSPACE_HOST:-./cc-jail}:${WORKSPACE_PATH:-/workspace}"
+      # Claude Code's state (see CLAUDE_CONFIG_DIR above). Ships with the repo
+      # as .claude/.gitkeep, so it exists -- and is yours, not root's -- on a
+      # fresh clone.
+      - ./.claude:/home/claude/.claude
+      # Host Docker daemon. Note: this grants root-equivalent access to the host.
+      - /var/run/docker.sock:/var/run/docker.sock
+    stdin_open: true
+    tty: true

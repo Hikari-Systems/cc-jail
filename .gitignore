@@ -1,0 +1,14 @@
+# Claude Code state (credentials, history, settings) -- but keep the directory
+# itself, so the bind mount has something to attach to on a fresh clone.
+.claude/*
+!.claude/.gitkeep
+
+# Default workspace mount; same reasoning.
+cc-jail/*
+!cc-jail/.gitkeep
+
+.env
+
+# Superseded: Claude Code now keeps this inside .claude/ via CLAUDE_CONFIG_DIR.
+# Still ignored so a leftover copy from an older checkout can't be committed.
+/.claude.json
