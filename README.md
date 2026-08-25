@@ -168,13 +168,13 @@ always is.
 Seed it once, from the host, with your own config:
 
 ```bash
-mkdir -p .config/git && cp ~/.gitconfig .config/git/config
+cp ~/.gitconfig .config/git/config
 ```
 
 …or write just what you want the agent committing as:
 
 ```bash
-mkdir -p .config/git && cat > .config/git/config <<'EOF'
+cat > .config/git/config <<'EOF'
 [user]
 	name = Your Name
 	email = you@example.com
@@ -186,9 +186,12 @@ EOF
 From then on it persists, and `git config --global …` **inside** the container edits that same
 file — the change is on your host the moment it is made.
 
-The directory is gitignored (`.config/*`), like `.claude/`. Keep it that way: a git identity is
-personal, and anything else that lands in there — `gh`'s OAuth token in `.config/gh/hosts.yml`,
-for instance — is a live credential.
+`.config/git/` is already there on a fresh clone, like every other directory this setup writes
+into — nothing to create first.
+
+The contents are gitignored (`.config/*`, `.config/git/*`), like `.claude/`. Keep it that way: a
+git identity is personal, and anything else that lands in there — `gh`'s OAuth token in
+`.config/gh/hosts.yml`, for instance — is a live credential.
 
 Two things worth knowing when copying a host config wholesale:
 
@@ -275,8 +278,8 @@ docker compose build --no-cache
   `.gitkeep` is tracked; the rest is gitignored. `CLAUDE_CONFIG_DIR` points Claude Code here, which
   is what keeps `.claude.json` inside this directory instead of loose in `$HOME`.
 - `.config/` — per-user CLI config inside the container: your git identity at `.config/git/config`,
-  plus whatever else follows `XDG_CONFIG_HOME` (`gh`, for one). Tracked only as `.gitkeep`; see
-  [Git identity](#git-identity).
+  plus whatever else follows `XDG_CONFIG_HOME` (`gh`, for one). Tracked only as `.gitkeep`, in
+  `.config/` and in `.config/git/` both; see [Git identity](#git-identity).
 - `.ssh/` — `known_hosts`, written on first connection, and any ssh `config` for the container.
   Tracked only as `.gitkeep`; no keys go here, see [SSH agent](#ssh-agent).
 - `cc-jail/` — the default, empty `WORKSPACE_HOST`. Also tracked only as `.gitkeep`.
@@ -285,7 +288,9 @@ docker compose build --no-cache
 
 - The mounted directories are all tracked as `.gitkeep` on purpose. Docker creates a missing bind
   source as a `root`-owned directory, which the unprivileged `claude` user then can't write to —
-  shipping them in the repo means they exist, owned by whoever cloned.
+  shipping them in the repo means they exist, owned by whoever cloned. `.config/git/` is kept for
+  the plainer reason that a directory you have to `mkdir` first is a step in the setup, and this
+  one no longer is.
 - `HOME` is pinned to `/home/claude` in `docker-compose.yml`. Forwarding the host environment
   (`--env-from-file <(env)`, or a bare `-e HOME`) otherwise carries the host's `HOME` in, and every
   tool that resolves a dotfile through it — git, ssh, `gh`, npm — then reads from a directory that

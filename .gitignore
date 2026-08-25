@@ -5,8 +5,13 @@
 
 # Container-side CLI config: your git identity, gh's token. Same reasoning --
 # and never commit it, it is personal and (for gh) a live credential.
+# .config/git/ is kept as well, so seeding an identity is a plain redirect
+# into an existing directory rather than a mkdir the README has to explain.
 .config/*
 !.config/.gitkeep
+!.config/git/
+.config/git/*
+!.config/git/.gitkeep
 
 # ssh config and known_hosts for the container. Same reasoning again -- and
 # nothing in here should ever reach a remote.
