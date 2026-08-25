@@ -3,6 +3,11 @@
 .claude/*
 !.claude/.gitkeep
 
+# Container-side CLI config: your git identity, gh's token. Same reasoning --
+# and never commit it, it is personal and (for gh) a live credential.
+.config/*
+!.config/.gitkeep
+
 # Default workspace mount; same reasoning.
 cc-jail/*
 !cc-jail/.gitkeep

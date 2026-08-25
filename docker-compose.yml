@@ -15,6 +15,24 @@ services:
     #   stat -c '%g' /var/run/docker.sock
     group_add:
       - "${DOCKER_GID:-999}"
+    # Re-pins the paths in `environment:` below from *inside* the container,
+    # which is the only place that always wins. Compose's `environment:` is
+    # beaten by `--env-from-file` / `-e` on the command line, so forwarding the
+    # host environment (see the README) drops the host's HOME -- and with it
+    # every dotfile lookup that goes through $HOME: git, ssh, gh, npm -- into a
+    # container where that directory does not exist. An entrypoint runs after
+    # all of that. `$$@` is an escaped `$@`; Compose reads a lone `$` as
+    # interpolation.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >-
+        export HOME=/home/claude
+        CLAUDE_CONFIG_DIR=/home/claude/.claude
+        XDG_CONFIG_HOME=/home/claude/.config
+        XDG_RUNTIME_DIR=/run/user/${UID:-1000};
+        exec "$$@"
+      - sh
     environment:
       # Keeps every piece of Claude Code state -- .claude.json, credentials,
       # settings, project history -- inside one directory, so the single
@@ -22,6 +40,16 @@ services:
       # would sit at $HOME and need its own file mount, which Docker creates
       # as a *directory* when it is missing, and Claude Code won't start.
       CLAUDE_CONFIG_DIR: /home/claude/.claude
+      # The container user's home, spelled out because the host's HOME leaks in
+      # whenever the environment is forwarded, and $HOME is where git, ssh, gh
+      # and npm look for their dotfiles.
+      HOME: /home/claude
+      # Where per-user CLI config lives, backed by the ./.config mount below.
+      # git reads $XDG_CONFIG_HOME/git/config as its global config when
+      # ~/.gitconfig is absent -- and writes `git config --global` back to it --
+      # so this is what carries a git identity across runs. gh and other
+      # XDG-aware tools keep their state here too.
+      XDG_CONFIG_HOME: /home/claude/.config
       # Claude Code's cross-session messaging socket is created under
       # XDG_RUNTIME_DIR. The host's value leaks in through the environment, but
       # /run/user/<uid> only exists where systemd-logind made it -- in here /run
@@ -38,6 +66,11 @@ services:
       # as .claude/.gitkeep, so it exists -- and is yours, not root's -- on a
       # fresh clone.
       - ./.claude:/home/claude/.claude
+      # CLI config, chiefly git's (see XDG_CONFIG_HOME above). A directory
+      # mount, not a file one: `git config` rewrites its config by renaming a
+      # lock file over it, which fails with EBUSY on a bind-mounted *file* but
+      # is an ordinary rename inside a bind-mounted *directory*.
+      - ./.config:/home/claude/.config
       # Host Docker daemon. Note: this grants root-equivalent access to the host.
       - /var/run/docker.sock:/var/run/docker.sock
     # Backs XDG_RUNTIME_DIR above. The messaging socket needs a directory that
