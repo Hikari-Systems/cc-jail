@@ -24,9 +24,10 @@ DOCKER_GID=$(stat -c '%g' /var/run/docker.sock 2>/dev/null || stat -f '%g' /var/
   docker compose run --rm claude
 ```
 
-Either way you get a bash shell in `/workspace` with `claude` on the `PATH`. The first `claude`
-invocation walks you through logging in; credentials are written to `.claude/` in this repo, so
-later runs start straight up.
+Either way you land in Claude Code itself, running in `/workspace`. The first invocation walks you
+through logging in; credentials are written to `.claude/` in this repo, so later runs start
+straight up. Name a command to get something else instead — `docker compose run --rm claude bash`
+for a shell, with `claude` on the `PATH` there too.
 
 Give it a git identity and an ssh agent once and it can commit and push too — see
 [Git identity](#git-identity) and [SSH agent](#ssh-agent).
@@ -272,7 +273,7 @@ docker compose build --no-cache
   a `claude` user matched to your host UID/GID so files written in the container are owned by you
   on the host.
 - `docker-compose.yml` — the `claude` service: builds the image, wires up the volume mounts, joins
-  the host's docker-socket group, and drops you at a shell in `/workspace`.
+  the host's docker-socket group, and starts Claude Code in `/workspace`.
 - `.env.example` — the settings above, with comments.
 - `.claude/` — Claude Code's state on the host: credentials, settings, and session history. Only
   `.gitkeep` is tracked; the rest is gitignored. `CLAUDE_CONFIG_DIR` points Claude Code here, which
