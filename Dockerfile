@@ -88,9 +88,9 @@ RUN apt-get update \
 	#
 	# ── Cloud and editor CLIs ────────────────────────────────────────────
 	#
-	# Two architectures to name, and each vendor spells them differently, so
+	# Two architectures to name, and AWS and Pulumi spell them differently, so
 	# the mapping is done once here: dpkg's own names on the left, and on the
-	# right what AWS, VS Code and Pulumi call the same machines.
+	# right what each of those two calls the same machines.
 	&& case "$(dpkg --print-architecture)" in \
 		amd64) AWS_ARCH=x86_64; ALT_ARCH=x64 ;; \
 		arm64) AWS_ARCH=aarch64; ALT_ARCH=arm64 ;; \
@@ -131,22 +131,6 @@ RUN apt-get update \
 		| tar -xz -C /tmp \
 	&& mv /tmp/pulumi/* /usr/local/bin/ \
 	&& rmdir /tmp/pulumi \
-	# The VS Code CLI: the `code` command on its own, without the editor.
-	# There is no GUI in here, so `code .` has nothing to open -- what this is
-	# for is `code tunnel`, which serves this container to a VS Code window
-	# elsewhere, and `code serve-web`, which serves it to a browser.
-	#
-	# The alpine build on purpose: it is the statically linked one, so it has
-	# no musl or glibc opinion and runs here unchanged. Microsoft publishes no
-	# separate glibc build of the CLI (`os=cli-linux-x64` is a 404).
-	#
-	# A tunnel's login lives in ~/.vscode-cli, which is inside the container
-	# and not one of the mounted directories, so it is gone with the container
-	# unless you mount it.
-	&& curl -fsSL "https://code.visualstudio.com/sha/download?build=stable&os=cli-alpine-${ALT_ARCH}" \
-		-o /tmp/vscode-cli.tar.gz \
-	&& tar -xzf /tmp/vscode-cli.tar.gz -C /usr/local/bin code \
-	&& rm -f /tmp/vscode-cli.tar.gz \
 	# Every --global install happens here, after useradd, so npm's prefix (set
 	# above) lands in a /home/claude that already exists and belongs to the
 	# container user rather than to root. Alongside Claude Code: Linear's own

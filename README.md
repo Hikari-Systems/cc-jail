@@ -275,11 +275,10 @@ still what moves the version baked into the image forward.
 
 - `Dockerfile` — Ubuntu 26.04 + Node 22 + `@anthropic-ai/claude-code`, plus `git`, `jq`, `curl`,
   `less`, `openssh-client`, `gh`, and the Docker CLI (`docker-ce-cli`, buildx, compose plugins).
-  Then the cloud and editor CLIs: `aws` (AWS CLI v2), `az` (Azure CLI), `pulumi`, and `code` — the
-  VS Code CLI on its own, so `code tunnel` and `code serve-web` work but `code .` has no GUI to
-  open. None of them persists a login: `~/.aws`, `~/.azure`, `~/.pulumi` and `~/.vscode-cli` are
-  all inside the container, so they go when it does unless you mount them. Creates a `claude` user
-  matched to your host UID/GID so files written in the container are owned by you on the host.
+  Then the cloud CLIs: `aws` (AWS CLI v2), `az` (Azure CLI) and `pulumi`. None of them persists a
+  login: `~/.aws`, `~/.azure` and `~/.pulumi` are all inside the container, so they go when it does
+  unless you mount them. Creates a `claude` user matched to your host UID/GID so files written in
+  the container are owned by you on the host.
 - `docker-compose.yml` — the `claude` service: builds the image, wires up the volume mounts, joins
   the host's docker-socket group, and starts Claude Code in `/workspace`.
 - `.env.example` — the settings above, with comments.
