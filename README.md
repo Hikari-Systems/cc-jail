@@ -55,6 +55,28 @@ cp .env.example .env
 | `UID` / `GID`    | Owner of files written back to the host (Linux)  | `1000`       |
 | `DOCKER_GID`     | GID owning `/var/run/docker.sock` on the host    | `999`        |
 
+### Passing host environment variables
+
+To pass all exported variables from the host into a one-off container, use Compose's
+`--env-from-file` with shell process substitution:
+
+```bash
+docker compose run --rm --env-from-file <(env) claude
+```
+
+Only exported variables are included. Variables that contain secrets are also forwarded, so a
+safer option is to pass only the variables Claude needs:
+
+```bash
+docker compose run --rm \
+  -e ANTHROPIC_API_KEY \
+  -e AWS_PROFILE \
+  -e GITHUB_TOKEN \
+  claude
+```
+
+With `-e NAME` and no value, Compose reads `NAME` from the host environment.
+
 ### Where your code is mounted
 
 `WORKSPACE_HOST` is the one that matters. Anything **not** mounted is invisible to the agent —
