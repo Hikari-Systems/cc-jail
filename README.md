@@ -29,7 +29,8 @@ invocation walks you through logging in; credentials are written to `.claude/` i
 later runs start straight up.
 
 Nothing else needs setting up — the mount points ship with the repo, and `--rm` means each session
-leaves no stopped container behind.
+leaves no stopped container behind. If you want the agent making commits, give it a git identity
+once: see [Git identity](#git-identity).
 
 By default `/workspace` is `./cc-jail`, an empty directory in this repo, which is a deliberately
 useless place to work. Point it at your actual code with `WORKSPACE_HOST`:
@@ -76,6 +77,12 @@ docker compose run --rm \
 ```
 
 With `-e NAME` and no value, Compose reads `NAME` from the host environment.
+
+Either form outranks the `environment:` block in `docker-compose.yml`, so forwarding wholesale would
+otherwise overwrite the paths this setup depends on — `HOME` above all, which the host always sets
+and which points at a directory that does not exist in here. The service entrypoint re-exports
+`HOME`, `CLAUDE_CONFIG_DIR`, `XDG_CONFIG_HOME` and `XDG_RUNTIME_DIR` inside the container, after
+any `-e` has been applied, so those four survive.
 
 ### Where your code is mounted
 
@@ -146,6 +153,53 @@ services:
       - ${HOME}/git/other:/workspace/other
 ```
 
+## Git identity
+
+The container starts with no git config of its own, so commits made in here would fail with
+*"Please tell me who you are"* — and a `git config --global` fixing that would vanish with the
+container. `.config/` in this repo is mounted at `/home/claude/.config` to hold it, the same way
+`.claude/` holds Claude Code's state. `XDG_CONFIG_HOME` points there, and git reads its global
+config from `$XDG_CONFIG_HOME/git/config` whenever `~/.gitconfig` is absent, which in here it
+always is.
+
+Seed it once, from the host, with your own config:
+
+```bash
+mkdir -p .config/git && cp ~/.gitconfig .config/git/config
+```
+
+…or write just what you want the agent committing as:
+
+```bash
+mkdir -p .config/git && cat > .config/git/config <<'EOF'
+[user]
+	name = Your Name
+	email = you@example.com
+[init]
+	defaultBranch = main
+EOF
+```
+
+From then on it persists, and `git config --global …` **inside** the container edits that same
+file — the change is on your host the moment it is made.
+
+The directory is gitignored (`.config/*`), like `.claude/`. Keep it that way: a git identity is
+personal, and anything else that lands in there — `gh`'s OAuth token in `.config/gh/hosts.yml`,
+for instance — is a live credential.
+
+Two things worth knowing when copying a host config wholesale:
+
+- **Helpers must exist in the container.** A `[filter "lfs"]` block, a `credential.helper`
+  pointing at Windows' `git-credential-manager.exe`, a `gpg.program` — git will run these and fail
+  when they aren't installed. Either drop those sections from the copy, or add the package to the
+  `Dockerfile` (`git-lfs` and `gnupg` are one `apt-get install` line).
+- **Paths are container paths.** `core.excludesfile = /home/you/.gitignore_global` resolves inside
+  the container, where that file doesn't exist.
+
+It has to be a directory mount rather than a `./gitconfig:/home/claude/.gitconfig` file mount:
+`git config` rewrites the file by renaming a lock file over it, and renaming over a bind-mounted
+*file* fails with `Device or resource busy`. Reads would work; the first write would not.
+
 ## Docker access
 
 `/var/run/docker.sock` is mounted in, and the container ships the Docker CLI, buildx and compose
@@ -186,13 +240,20 @@ docker compose build --no-cache
 - `.claude/` — Claude Code's state on the host: credentials, settings, and session history. Only
   `.gitkeep` is tracked; the rest is gitignored. `CLAUDE_CONFIG_DIR` points Claude Code here, which
   is what keeps `.claude.json` inside this directory instead of loose in `$HOME`.
+- `.config/` — per-user CLI config inside the container: your git identity at `.config/git/config`,
+  plus whatever else follows `XDG_CONFIG_HOME` (`gh`, for one). Tracked only as `.gitkeep`; see
+  [Git identity](#git-identity).
 - `cc-jail/` — the default, empty `WORKSPACE_HOST`. Also tracked only as `.gitkeep`.
 
 ## Notes
 
-- Both mounted directories are tracked as `.gitkeep` on purpose. Docker creates a missing bind
+- The mounted directories are all tracked as `.gitkeep` on purpose. Docker creates a missing bind
   source as a `root`-owned directory, which the unprivileged `claude` user then can't write to —
   shipping them in the repo means they exist, owned by whoever cloned.
+- `HOME` is pinned to `/home/claude` in `docker-compose.yml`. Forwarding the host environment
+  (`--env-from-file <(env)`, or a bare `-e HOME`) otherwise carries the host's `HOME` in, and every
+  tool that resolves a dotfile through it — git, ssh, `gh`, npm — then reads from a directory that
+  does not exist in the container. `XDG_RUNTIME_DIR` is pinned for the same reason.
 - `sudo` is installed and `claude` is in the `sudo` group, but the account's password is locked
   (`passwd -S claude` → `L`), so `sudo` prompts for a password that doesn't exist and fails. To use
   it for ad-hoc `apt-get install` during a session, add a rule in the `Dockerfile`:
