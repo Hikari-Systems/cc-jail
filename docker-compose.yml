@@ -34,6 +34,13 @@ services:
         SSH_AUTH_SOCK=/run/ssh-agent.sock;
         exec "$$@"
       - sh
+    # Restates the image's `CMD ["claude"]`. Compose *clears* the image's CMD
+    # whenever a service overrides `entrypoint:`, so without this `$$@` above
+    # expands to nothing, `exec` runs with no arguments, and the container
+    # exits silently -- making `docker compose run claude claude` the only
+    # spelling that worked. An explicit argument on the command line still
+    # replaces this, so `docker compose run claude bash` opens a shell.
+    command: ["claude"]
     environment:
       # Keeps every piece of Claude Code state -- .claude.json, credentials,
       # settings, project history -- inside one directory, so the single
