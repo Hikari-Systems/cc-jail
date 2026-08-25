@@ -1,4 +1,4 @@
-# hs-claude
+# cc-jail (Jail for Claude Code)
 
 A containerised [Claude Code](https://claude.com/claude-code) environment. Claude Code runs inside
 an Ubuntu container as an unprivileged `claude` user, with your source tree bind-mounted in — so
@@ -12,7 +12,7 @@ is also the one thing that punches a hole through the isolation above.
 ## Quick start
 
 ```bash
-git clone <repo-url> hs-claude && cd hs-claude
+git clone <repo-url> cc-jail && cd cc-jail
 docker compose run --rm claude
 ```
 
@@ -89,7 +89,7 @@ to a command — so the lookup has to happen in the shell. Worth a function if y
 
 ```bash
 hsclaude() {
-  ( cd ~/git/hs/hs-claude \
+  ( cd ~/git/hs/cc-jail \
     && DOCKER_GID=$(stat -c '%g' /var/run/docker.sock) \
        docker compose run --rm claude "${@:-bash}" )
 }
