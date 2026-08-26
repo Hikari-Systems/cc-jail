@@ -13,6 +13,23 @@
 .config/git/*
 !.config/git/.gitkeep
 
+# Cloud CLI logins for the container: `aws configure` writes .aws/credentials
+# and .aws/config, `az login` writes .azure/. Mounted so a login outlives the
+# container, ignored because both hold live credentials -- .aws/credentials is
+# a long-lived access key in plain text and .azure/ caches refresh tokens.
+.aws/*
+!.aws/.gitkeep
+
+.azure/*
+!.azure/.gitkeep
+
+# Pulumi's state: the access token from `pulumi login` in credentials.json,
+# plus the downloaded provider plugins. Mounted so neither has to be fetched
+# again next run; ignored because of the token, and because plugins/ runs to
+# hundreds of MB and is a cache, not source.
+.pulumi/*
+!.pulumi/.gitkeep
+
 # ssh config and known_hosts for the container. Same reasoning again -- and
 # nothing in here should ever reach a remote.
 .ssh/*

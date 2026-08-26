@@ -497,10 +497,10 @@ still what moves the version baked into the image forward.
 
 - `Dockerfile` — Ubuntu 26.04 + Node 22 + `@anthropic-ai/claude-code`, plus `git`, `jq`, `curl`,
   `less`, `openssh-client`, `gh`, and the Docker CLI (`docker-ce-cli`, buildx, compose plugins).
-  Then the cloud CLIs: `aws` (AWS CLI v2), `az` (Azure CLI) and `pulumi`. None of them persists a
-  login: `~/.aws`, `~/.azure` and `~/.pulumi` are all inside the container, so they go when it does
-  unless you mount them. Creates a `claude` user matched to your host UID/GID so files written in
-  the container are owned by you on the host.
+  Then the cloud CLIs: `aws` (AWS CLI v2), `az` (Azure CLI) and `pulumi`. `~/.aws`, `~/.azure` and
+  `~/.pulumi` are all mounted from this repo, so an `aws configure`, `az login` or `pulumi login`
+  outlives the container instead of having to be repeated every run. Creates a `claude` user matched
+  to your host UID/GID so files written in the container are owned by you on the host.
 - `docker-compose.yml` — the `claude` service: builds the image, wires up the volume mounts, joins
   the host's docker-socket group, and starts Claude Code in `/workspace`. Then `slater-seed`,
   `slater` and `graphiti`, all profile-gated and inert unless asked for; see [Memory](#memory).
@@ -513,6 +513,14 @@ still what moves the version baked into the image forward.
   `.config/` and in `.config/git/` both; see [Git identity](#git-identity).
 - `.ssh/` — `known_hosts`, written on first connection, and any ssh `config` for the container.
   Tracked only as `.gitkeep`; no keys go here, see [SSH agent](#ssh-agent).
+- `.aws/` — the AWS CLI's config and credentials for the container, so `aws configure` (or an
+  `aws sso login`) is done once rather than every run. Tracked only as `.gitkeep`; the rest is
+  gitignored, because `.aws/credentials` holds a long-lived access key in plain text.
+- `.azure/` — the Azure CLI's profile for the container, so `az login` survives a restart. Tracked
+  only as `.gitkeep`; the rest is gitignored, as it caches refresh tokens.
+- `.pulumi/` — Pulumi's state: the `pulumi login` token, and the provider plugins it downloads, so
+  neither is fetched again next run. Tracked only as `.gitkeep`; the rest is gitignored, for the
+  token and because `plugins/` is a cache that runs to hundreds of MB.
 - `cc-jail/` — the default, empty `WORKSPACE_HOST`. Also tracked only as `.gitkeep`.
 - `memory/` — the optional Graphiti-on-Slater memory stack: the seed schema and its generator,
   Slater's ACL, and the Dockerfile, config and startup shims for Graphiti's MCP server. All of
