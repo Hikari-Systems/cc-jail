@@ -83,24 +83,24 @@ services:
       # mount, not a file one: `git config` rewrites its config by renaming a
       # lock file over it, which fails with EBUSY on a bind-mounted *file* but
       # is an ordinary rename inside a bind-mounted *directory*.
-      - ./.config:/home/claude/.config
+      - ../../../.config:/home/claude/.config
       # ssh config and known_hosts, so a host key accepted once is still
       # accepted next run. Private keys do not belong here -- the agent below
       # is what does the signing. Ships as .ssh/.gitkeep.
-      - ./.ssh:/home/claude/.ssh
+      - ../../../.ssh:/home/claude/.ssh
       # Cloud CLI logins, so `aws configure` / `az login` survive the container
       # instead of having to be repeated every run. Both ship as .gitkeep and
       # are otherwise gitignored: each holds live credentials (an access key in
       # .aws/credentials, cached refresh tokens under .azure). Directory mounts
       # for the same reason as .config above -- these CLIs rewrite their files
       # by renaming a temporary over them, which EBUSYs on a bind-mounted file.
-      - ./.aws:/home/claude/.aws
-      - ./.azure:/home/claude/.azure
+      - ../../../.aws:/home/claude/.aws
+      - ../../../.azure:/home/claude/.azure
       # Pulumi's state (PULUMI_HOME is unset, so it defaults here). Keeps a
       # `pulumi login` token across runs like the two above -- and, unlike
       # them, doubles as a plugin cache: ~/.pulumi/plugins is where provider
       # downloads land, so mounting it stops every run re-fetching them.
-      - ./.pulumi:/home/claude/.pulumi
+      - ../../../.pulumi:/home/claude/.pulumi
       # The host's ssh-agent socket (see SSH_AUTH_SOCK above). The agent only
       # signs; it never hands over key material -- but it will sign anything
       # the container asks it to, with every key it holds. Falls back to
