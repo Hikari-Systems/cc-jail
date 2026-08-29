@@ -41,9 +41,15 @@ RUN apt-get update \
 	&& install -m 0755 -d /etc/apt/keyrings \
 	&& curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc \
 	&& chmod a+r /etc/apt/keyrings/docker.asc \
-	# download.docker.com lags new Ubuntu releases; fall back to the latest LTS suite.
+	# download.docker.com lags new Ubuntu releases; fall back to the latest LTS
+	# suite. Probe the package index rather than the suite's Release file: these
+	# repos publish a signed but EMPTY suite for a new Ubuntu release long before
+	# they put a package in it, so a Release file is not evidence that anything
+	# installable is behind it (see the azure-cli note below, where exactly that
+	# happened). Asking for the package by name can't be fooled either way.
 	&& DOCKER_SUITE="$(. /etc/os-release && echo "$VERSION_CODENAME")" \
-	&& if ! curl -fsIL "https://download.docker.com/linux/ubuntu/dists/${DOCKER_SUITE}/Release" >/dev/null 2>&1; then \
+	&& if ! curl -fsSL "https://download.docker.com/linux/ubuntu/dists/${DOCKER_SUITE}/stable/binary-$(dpkg --print-architecture)/Packages" 2>/dev/null \
+		| grep -q '^Package: docker-ce-cli$'; then \
 		DOCKER_SUITE=noble; \
 	fi \
 	&& echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${DOCKER_SUITE} stable" \
@@ -106,12 +112,20 @@ RUN apt-get update \
 	&& rm -rf /tmp/awscliv2.zip /tmp/aws \
 	# Azure CLI, from Microsoft's apt repo. Same shape as docker's above and
 	# for the same reason: packages.microsoft.com lags new Ubuntu releases, so
-	# fall back to the latest LTS suite when this one's codename is absent.
+	# fall back to the latest LTS suite when this one has no azure-cli in it.
+	#
+	# "Has a Release file" is not the same question. Microsoft publishes the new
+	# suite -- signed, listed, and completely empty -- as soon as the Ubuntu
+	# release exists: 26.04 "resolute" has a valid Release whose Packages index
+	# is zero bytes. apt indexes that without complaint and then the install
+	# fails with "E: Unable to locate package azure-cli". So probe for the
+	# package, which is what we actually need, instead of the suite.
 	&& curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
 		-o /etc/apt/keyrings/microsoft.asc \
 	&& chmod a+r /etc/apt/keyrings/microsoft.asc \
 	&& AZURE_SUITE="$(. /etc/os-release && echo "$VERSION_CODENAME")" \
-	&& if ! curl -fsIL "https://packages.microsoft.com/repos/azure-cli/dists/${AZURE_SUITE}/Release" >/dev/null 2>&1; then \
+	&& if ! curl -fsSL "https://packages.microsoft.com/repos/azure-cli/dists/${AZURE_SUITE}/main/binary-$(dpkg --print-architecture)/Packages" 2>/dev/null \
+		| grep -q '^Package: azure-cli$'; then \
 		AZURE_SUITE=noble; \
 	fi \
 	&& echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/microsoft.asc] https://packages.microsoft.com/repos/azure-cli ${AZURE_SUITE} main" \

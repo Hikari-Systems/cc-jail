@@ -75,6 +75,7 @@ services:
       # Host tree Claude can see. Override with WORKSPACE_HOST / WORKSPACE_PATH
       # (see .env.example); add further mounts via docker-compose.override.yml.
       - "${WORKSPACE_HOST:-./cc-jail}:${WORKSPACE_PATH:-/workspace}"
+      - "../../configs:/configs"
       # Claude Code's state (see CLAUDE_CONFIG_DIR above). Ships with the repo
       # as .claude/.gitkeep, so it exists -- and is yours, not root's -- on a
       # fresh clone.
